@@ -1,0 +1,26 @@
+name: vaxp_dock
+description: "VAXP Linux Dock"
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.9.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_svg: ^2.0.9
+  vaxp_core:
+    path: packages/vaxp_core
+  file_picker:
+  cupertino_icons: ^1.0.8
+  shared_preferences: ^2.5.3
+  hotkey_manager: ^0.1.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

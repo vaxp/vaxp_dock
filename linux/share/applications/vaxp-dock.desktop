@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=VAXP Dock
+Comment=Application dock for Linux
+Exec=vaxp-dock
+Icon=panel
+Terminal=false
+Categories=Utility;Core;
+Keywords=dock;launcher;panel;
+StartupNotify=true
