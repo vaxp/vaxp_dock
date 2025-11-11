@@ -91,6 +91,9 @@ class _DockHomeState extends State<DockHome> {
   late final WindowMatcherService _windowMatcher;
   final DockSettingsService _settingsService = DockSettingsService();
   DockSettings _settings = DockSettings();
+  
+  // Theme files cache - pre-loaded for fast in-memory searches
+  List<File> _themeFiles = [];
 
   @override
   void initState() {
@@ -179,11 +182,45 @@ class _DockHomeState extends State<DockHome> {
     await _settingsService.load();
     setState(() {
       _settings = _settingsService.settings;
+      // Load theme files whenever settings load or change
+      _loadThemeFiles();
     });
+  }
+
+  void _loadThemeFiles() {
+    if (_settings.iconPackPath != null && _settings.iconPackPath!.isNotEmpty) {
+      try {
+        final dir = Directory(_settings.iconPackPath!);
+        if (dir.existsSync()) {
+          _themeFiles = dir
+              .listSync(recursive: true, followLinks: false)
+              .whereType<File>()
+              .toList();
+          debugPrint('Loaded ${_themeFiles.length} theme files from ${_settings.iconPackPath}');
+        } else {
+          _themeFiles = [];
+          debugPrint('Icon pack directory does not exist: ${_settings.iconPackPath}');
+        }
+      } catch (e) {
+        _themeFiles = [];
+        debugPrint('Error loading theme files: $e');
+      }
+    } else {
+      _themeFiles = [];
+    }
   }
 
   Future<void> _saveSettings(DockSettings settings) async {
     await _settingsService.updateSettings(settings);
+
+    // Update local state with new settings
+    if (mounted) {
+      setState(() {
+        _settings = settings;
+        // Reload theme files if icon pack changed
+        _loadThemeFiles();
+      });
+    }
 
     // Clear Flutter's image cache so updated files (background image,
     // custom icons) are reloaded immediately. Also evict any file images
@@ -360,6 +397,50 @@ class _DockHomeState extends State<DockHome> {
     }
   }
 
+  /// Find an icon in the theme pack using smart candidate-based matching
+  /// (similar to how the launcher does it)
+  String? _findIconInTheme(String appName, String? iconPath) {
+    if (_themeFiles.isEmpty) return null;
+
+    try {
+      // Build candidates from app name and default icon path
+      final candidates = <String>{};
+      
+      // Add candidates from the default icon path (if available)
+      if (iconPath != null && iconPath.isNotEmpty) {
+        final raw = iconPath;
+        final fn = raw.split(Platform.pathSeparator).last;
+        final dot = fn.lastIndexOf('.');
+        final base = dot > 0 ? fn.substring(0, dot) : fn;
+        candidates.add(base.toLowerCase());
+      }
+      
+      // Add candidates from app name
+      final nameBase = appName.toLowerCase();
+      candidates.add(nameBase);
+      candidates.add(nameBase.replaceAll(' ', '-'));
+      candidates.add(nameBase.replaceAll(' ', '_'));
+      candidates.add(nameBase.replaceAll(' ', ''));
+
+      // Search in pre-loaded theme files
+      for (final f in _themeFiles) {
+        final fn = f.path.split(Platform.pathSeparator).last;
+        final dot = fn.lastIndexOf('.');
+        final base = dot > 0 ? fn.substring(0, dot) : fn;
+        final low = base.toLowerCase();
+        
+        // Check for exact match OR partial match
+        if (candidates.contains(low) || candidates.any((c) => fn.toLowerCase().contains(c))) {
+          return f.path;
+        }
+      }
+    } catch (e) {
+      debugPrint('Error searching theme files: $e');
+    }
+
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -408,19 +489,12 @@ class _DockHomeState extends State<DockHome> {
                       finalIconPath = customPath;
                       isSvg = customPath.toLowerCase().endsWith('.svg');
                     }
-                  } else if (_settings.iconPackPath != null) {
-                    // Check icon pack directory
-                    final iconPackDir = Directory(_settings.iconPackPath!);
-                    if (iconPackDir.existsSync()) {
-                      final extensions = ['.svg', '.png', '.ico', '.xpm', '.bmp', '.jpg', '.jpeg', '.gif', '.webp'];
-                      for (final ext in extensions) {
-                        final iconPath = '${_settings.iconPackPath}/${matched.name}$ext';
-                        if (File(iconPath).existsSync()) {
-                          finalIconPath = iconPath;
-                          isSvg = ext == '.svg';
-                          break;
-                        }
-                      }
+                  } else if (_settings.iconPackPath != null && _themeFiles.isNotEmpty) {
+                    // Use smart theme file search (like launcher does it)
+                    final themedPath = _findIconInTheme(matched.name, matched.iconPath);
+                    if (themedPath != null) {
+                      finalIconPath = themedPath;
+                      isSvg = themedPath.toLowerCase().endsWith('.svg');
                     }
                   }
                   
@@ -441,18 +515,12 @@ class _DockHomeState extends State<DockHome> {
                     customIconPath = customPath;
                     isSvg = customPath.toLowerCase().endsWith('.svg');
                   }
-                } else if (_settings.iconPackPath != null) {
-                  final iconPackDir = Directory(_settings.iconPackPath!);
-                  if (iconPackDir.existsSync()) {
-                    final extensions = ['.svg', '.png', '.ico', '.xpm', '.bmp', '.jpg', '.jpeg', '.gif', '.webp'];
-                    for (final ext in extensions) {
-                      final iconPath = '${_settings.iconPackPath}/${w.title}$ext';
-                      if (File(iconPath).existsSync()) {
-                        customIconPath = iconPath;
-                        isSvg = ext == '.svg';
-                        break;
-                      }
-                    }
+                } else if (_settings.iconPackPath != null && _themeFiles.isNotEmpty) {
+                  // Use smart theme file search (like launcher does it)
+                  final themedPath = _findIconInTheme(w.title, null);
+                  if (themedPath != null) {
+                    customIconPath = themedPath;
+                    isSvg = themedPath.toLowerCase().endsWith('.svg');
                   }
                 }
                 
