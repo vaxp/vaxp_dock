@@ -304,7 +304,19 @@ class _DockHomeState extends State<DockHome> {
   }
 
   void _handlePinRequest(String name, String exec, String? iconPath, bool isSvgIcon) {
-    // Legacy: PinApp requests are ignored; windows are tracked via wmctrl only
+    // Handle pin requests from launcher
+    setState(() {
+      // Check if already pinned
+      if (!_pinnedApps.any((app) => app.name == name)) {
+        _pinnedApps.add(DesktopEntry(
+          name: name,
+          exec: exec,
+          iconPath: iconPath,
+          isSvgIcon: isSvgIcon,
+        ));
+        _savePinnedApps();
+      }
+    });
   }
 
   void _handleUnpinRequest(String name) {
