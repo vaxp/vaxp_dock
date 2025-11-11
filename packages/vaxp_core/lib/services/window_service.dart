@@ -100,12 +100,31 @@ class WindowService {
         // Title is everything after the class and hostname
         // Format: ID DESK CLASS.INSTANCE HOSTNAME TITLE...
         // So title starts at index 4 (0=ID, 1=DESK, 2=CLASS, 3=HOSTNAME, 4+=TITLE)
-        final title = parts.length > 4 
-            ? parts.sublist(4).join(' ').trim()
-            : (parts.length > 3 ? parts[3] : '').trim();
+        // Note: Some windows might not have a hostname, so we need flexible parsing
+        String title;
+        if (parts.length > 4) {
+          // Standard case: ID DESK CLASS HOSTNAME TITLE...
+          title = parts.sublist(4).join(' ').trim();
+        } else if (parts.length > 3) {
+          // No hostname or title is part of class field: ID DESK CLASS TITLE
+          // Check if part[3] looks like a title (not a class name)
+          final possibleTitle = parts[3];
+          // If it contains spaces or looks like a title, use it
+          if (possibleTitle.contains(' ') || possibleTitle.length > 10) {
+            title = parts.sublist(3).join(' ').trim();
+          } else {
+            // Might be just the class, try to get more info
+            title = possibleTitle;
+          }
+        } else {
+          // Very minimal info, skip
+          continue;
+        }
 
         // Skip invisible/special windows (those often start with '-')
-        if (desktopIndex < 0) continue; // -1 means sticky/all-desktops or hidden
+        // But allow desktop index -1 (sticky/all-desktops) as some apps use this
+        // Only skip if desktop index is explicitly negative AND title suggests it's a system window
+        if (desktopIndex < 0 && _isSystemWindow(title, windowClass)) continue;
 
         // Skip windows with empty titles (often internal)
         if (title.isEmpty) continue;
@@ -216,43 +235,60 @@ class WindowService {
   }
 
   /// Simple heuristic to filter out non-GUI/system windows
+  /// Made less aggressive to avoid filtering legitimate apps
   static bool _isSystemWindow(String title, String? windowClass) {
-    final lowerTitle = title.toLowerCase();
+    final lowerTitle = title.toLowerCase().trim();
     final lowerClass = windowClass?.toLowerCase() ?? '';
     
-    // Common non-GUI windows to skip by title
-    final titleSkipPatterns = [
-      'xfdesktop', // desktop window
-      'panel', // system panel
-      'notification', // notifications
-      'gnome-shell', // shell
-      'xfce4-panel',
-      'polybar',
-      'i3bar',
-      'sway',
-      'openbox',
-      'fluxbox',
-      'enlightenment',
-      'vaxp-dock', // self
-      'desktop', // desktop background
-    ];
-
-    for (final pattern in titleSkipPatterns) {
-      if (lowerTitle.contains(pattern)) return true;
-    }
-
-    // Skip by window class
-    final classSkipPatterns = [
+    // Only filter if title/class exactly matches or starts with known system patterns
+    // This prevents filtering apps that happen to contain these words
+    
+    // Skip by exact window class matches (most reliable)
+    final exactClassMatches = [
       'xfdesktop',
       'xfce4-panel',
       'gnome-shell',
       'polybar',
       'i3bar',
       'vaxp-dock',
+      'conky',
+      'tint2',
     ];
-
-    for (final pattern in classSkipPatterns) {
-      if (lowerClass.contains(pattern)) return true;
+    
+    for (final pattern in exactClassMatches) {
+      if (lowerClass == pattern || lowerClass.startsWith('$pattern.')) {
+        return true;
+      }
+    }
+    
+    // Skip by exact title matches (more precise than contains)
+    final exactTitleMatches = [
+      'xfdesktop',
+      'xfce4-panel',
+      'gnome-shell',
+      'polybar',
+      'i3bar',
+      'vaxp-dock',
+      'conky',
+      'tint2',
+    ];
+    
+    for (final pattern in exactTitleMatches) {
+      if (lowerTitle == pattern) {
+        return true;
+      }
+    }
+    
+    // Only filter titles that start with known system prefixes (less aggressive)
+    final titlePrefixPatterns = [
+      'desktop window', // desktop background windows
+      'compositor', // compositor windows
+    ];
+    
+    for (final pattern in titlePrefixPatterns) {
+      if (lowerTitle.startsWith(pattern)) {
+        return true;
+      }
     }
 
     return false;

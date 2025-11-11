@@ -88,13 +88,25 @@ class DesktopEntry {
           if (name != null && exec != null && shouldDisplay && !seen.contains(name)) {
             seen.add(name);
             if (icon != null) {
-              final iconPath = icon.startsWith('/') ? icon : IconProvider.findIcon(icon);
+              // IconProvider.findIcon handles symlinks automatically
+              // For absolute paths, check if file exists first, then resolve through IconProvider
+              String? iconPath;
+              if (icon.startsWith('/')) {
+                if (File(icon).existsSync()) {
+                  // Use IconProvider to resolve symlinks even for absolute paths
+                  iconPath = IconProvider.findIcon(icon);
+                }
+              } else {
+                // Icon name, search in icon theme
+                iconPath = IconProvider.findIcon(icon);
+              }
+              
               if (iconPath != null) {
                 entries.add(
                   DesktopEntry(
                     name: name,
                     exec: exec,
-                    iconPath: iconPath,
+                    iconPath: iconPath, // Already resolved symlink via IconProvider
                     isSvgIcon: iconPath.toLowerCase().endsWith('.svg'),
                   ),
                 );

@@ -2,13 +2,33 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 class IconProvider {
+  /// Resolve a symbolic link to its target path
+  /// Returns the resolved path, or the original path if not a symlink
+  static String _resolveSymlink(String path) {
+    try {
+      final file = File(path);
+      if (file.existsSync()) {
+        // Check if it's a symbolic link
+        final linkTarget = file.resolveSymbolicLinksSync();
+        return linkTarget;
+      }
+    } catch (_) {
+      // Not a symlink or error resolving, return original
+    }
+    return path;
+  }
+
   /// Find an icon file in the system icon theme
+  /// Handles symbolic links by resolving them to actual files
   static String? findIcon(String iconName) {
     if (iconName.isEmpty) return null;
     
-    // 1. If it's an absolute path, try it directly
-    if (iconName.startsWith('/') && File(iconName).existsSync()) {
-      return iconName;
+    // 1. If it's an absolute path, try it directly and resolve symlinks
+    if (iconName.startsWith('/')) {
+      final file = File(iconName);
+      if (file.existsSync()) {
+        return _resolveSymlink(iconName);
+      }
     }
     
     // 2. Additional system icon paths
@@ -64,14 +84,14 @@ class IconProvider {
             for (final ext in extensions) {
               final path = '$sizeDir/$iconName$ext';
               if (File(path).existsSync()) {
-                return path;
+                return _resolveSymlink(path);
               }
             }
 
             // Try without extension
             final path = '$sizeDir/$iconName';
             if (File(path).existsSync()) {
-              return path;
+              return _resolveSymlink(path);
             }
           }
         }
@@ -82,14 +102,14 @@ class IconProvider {
     for (final ext in extensions) {
       final pixmapPath = '/usr/share/pixmaps/$iconName$ext';
       if (File(pixmapPath).existsSync()) {
-        return pixmapPath;
+        return _resolveSymlink(pixmapPath);
       }
     }
 
     // Try pixmaps without extension
     final pixmapPath = '/usr/share/pixmaps/$iconName';
     if (File(pixmapPath).existsSync()) {
-      return pixmapPath;
+      return _resolveSymlink(pixmapPath);
     }
 
     return null;

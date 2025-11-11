@@ -1,3 +1,4 @@
+import 'dart:io';
 import '../models/desktop_entry.dart';
 import '../utils/icon_provider.dart';
 import 'window_service.dart';
@@ -44,44 +45,77 @@ class WindowMatcherService {
     final lowerClass = windowClass.toLowerCase();
     final lowerInstance = windowInstance?.toLowerCase();
 
-    // Try exact match first
-    for (final entry in _desktopEntries) {
-      if (entry.exec == null) continue;
-      final execBase = _getExecBase(entry.exec!);
-      if (execBase.toLowerCase() == lowerClass) {
-        return entry;
-      }
-    }
-
-    // Try partial match
+    // Try exact match first (most reliable)
     for (final entry in _desktopEntries) {
       if (entry.exec == null) continue;
       final execBase = _getExecBase(entry.exec!);
       final lowerExec = execBase.toLowerCase();
       
-      if (lowerExec.contains(lowerClass) || lowerClass.contains(lowerExec)) {
+      // Exact match
+      if (lowerExec == lowerClass) {
         return entry;
       }
       
-      // Also check name
-      if (entry.name.toLowerCase().contains(lowerClass) || 
-          lowerClass.contains(entry.name.toLowerCase())) {
+      // Match without common prefixes/suffixes
+      if (_normalizeForMatch(lowerExec) == _normalizeForMatch(lowerClass)) {
         return entry;
       }
     }
 
-    // Try matching by instance if available
+    // Try matching by instance if available (often more specific)
     if (lowerInstance != null) {
       for (final entry in _desktopEntries) {
         if (entry.exec == null) continue;
         final execBase = _getExecBase(entry.exec!);
-        if (execBase.toLowerCase() == lowerInstance) {
+        final lowerExec = execBase.toLowerCase();
+        
+        if (lowerExec == lowerInstance || 
+            _normalizeForMatch(lowerExec) == _normalizeForMatch(lowerInstance)) {
           return entry;
         }
       }
     }
 
+    // Try partial match (less reliable but catches more cases)
+    for (final entry in _desktopEntries) {
+      if (entry.exec == null) continue;
+      final execBase = _getExecBase(entry.exec!);
+      final lowerExec = execBase.toLowerCase();
+      
+      // Check if class contains exec or vice versa (with word boundaries)
+      if (_matchesPartially(lowerExec, lowerClass)) {
+        return entry;
+      }
+      
+      // Also check name (some apps have different exec vs name)
+      final lowerName = entry.name.toLowerCase();
+      if (_matchesPartially(lowerName, lowerClass)) {
+        return entry;
+      }
+    }
+
     return null;
+  }
+
+  /// Normalize strings for matching (remove common variations)
+  String _normalizeForMatch(String str) {
+    return str
+        .replaceAll(RegExp(r'[-_]'), '') // Remove dashes and underscores
+        .replaceAll(RegExp(r'\s+'), '') // Remove spaces
+        .toLowerCase();
+  }
+
+  /// Check if two strings match partially (one contains the other or vice versa)
+  bool _matchesPartially(String str1, String str2) {
+    final norm1 = _normalizeForMatch(str1);
+    final norm2 = _normalizeForMatch(str2);
+    
+    // Check if one contains the other (with minimum length to avoid false positives)
+    if (norm1.length >= 3 && norm2.length >= 3) {
+      return norm1.contains(norm2) || norm2.contains(norm1);
+    }
+    
+    return false;
   }
 
   /// Match desktop entry by window title
@@ -141,13 +175,26 @@ class WindowMatcherService {
   }
 
   /// Resolve icon for a desktop entry (ensure icon path is set)
+  /// Handles symbolic links automatically via IconProvider
   DesktopEntry _resolveIcon(DesktopEntry entry) {
-    // If icon already resolved, return as is
+    // If icon already resolved, ensure symlink is resolved
     if (entry.iconPath != null && entry.iconPath!.isNotEmpty) {
+      // IconProvider.findIcon already resolves symlinks, but if we have a direct path,
+      // we should verify it's resolved
+      final resolvedPath = _resolveSymlinkIfNeeded(entry.iconPath!);
+      if (resolvedPath != entry.iconPath) {
+        return DesktopEntry(
+          name: entry.name,
+          exec: entry.exec,
+          iconPath: resolvedPath,
+          isSvgIcon: resolvedPath.toLowerCase().endsWith('.svg'),
+          autoRemoveOnExit: entry.autoRemoveOnExit,
+        );
+      }
       return entry;
     }
 
-    // Try to find icon by entry name
+    // Try to find icon by entry name (IconProvider handles symlinks)
     final iconPath = IconProvider.findIcon(entry.name.toLowerCase());
     if (iconPath != null) {
       return DesktopEntry(
@@ -178,6 +225,19 @@ class WindowMatcherService {
 
     // Return entry without icon (will use default)
     return entry;
+  }
+
+  /// Resolve symbolic link if the path is a symlink
+  String _resolveSymlinkIfNeeded(String path) {
+    try {
+      final file = File(path);
+      if (file.existsSync()) {
+        return file.resolveSymbolicLinksSync();
+      }
+    } catch (_) {
+      // Not a symlink or error, return original
+    }
+    return path;
   }
 
   /// Get all desktop entries (for debugging)
