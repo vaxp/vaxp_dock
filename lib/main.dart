@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vaxp_core/models/desktop_entry.dart';
+import 'package:vaxp_core/services/window_service.dart';
 import 'package:vaxp_core/services/dock_service.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 import 'widgets/dock/dock_panel.dart';
@@ -62,8 +63,10 @@ class DockHome extends StatefulWidget {
 class _DockHomeState extends State<DockHome> {
   String? _backgroundImagePath;
   List<DesktopEntry> _pinnedApps = [];
+  List<WindowInfo> _openWindows = [];
   bool _launcherVisible = false;
   bool _launcherMinimized = false;
+  late final WindowService _windowService;
 
   @override
   void initState() {
@@ -75,6 +78,16 @@ class _DockHomeState extends State<DockHome> {
     WidgetsFlutterBinding.ensureInitialized();
     _loadPinnedApps();
     _setupHotkey();
+
+    // Start window monitoring
+    _windowService = WindowService();
+    _windowService.start();
+    _windowService.onWindowsChanged.listen((windows) {
+      if (!mounted) return;
+      setState(() {
+        _openWindows = windows;
+      });
+    });
   }
 
   void _handleLauncherState(String state) {
@@ -120,23 +133,20 @@ class _DockHomeState extends State<DockHome> {
   }
 
   void _handlePinRequest(String name, String exec, String? iconPath, bool isSvgIcon) {
-    setState(() {
-      if (!_pinnedApps.any((app) => app.name == name)) {
-        _pinnedApps.add(DesktopEntry(
-          name: name,
-          exec: exec,
-          iconPath: iconPath,
-          isSvgIcon: isSvgIcon,
-        ));
-        _savePinnedApps(); // Save changes to persistent storage
-      }
-    });
+    // Legacy: PinApp requests are ignored; windows are tracked via wmctrl only
   }
 
   void _handleUnpinRequest(String name) {
     setState(() {
-      _pinnedApps.removeWhere((app) => app.name == name);
-      _savePinnedApps(); // Save changes to persistent storage
+      var changed = false;
+      _pinnedApps.removeWhere((app) {
+        if (app.name == name) {
+          changed = true;
+          return true;
+        }
+        return false;
+      });
+      if (changed) _savePinnedApps(); // Save persistent pinned changes
     });
   }
 
@@ -200,9 +210,19 @@ class _DockHomeState extends State<DockHome> {
 
   @override
   void dispose() {
-    hotKeyManager.unregisterAll();
+    HotKeyManager.instance.unregisterAll();
     widget.dockService.dispose();
+    _windowService.dispose();
     super.dispose();
+  }
+
+  Future<void> _activateWindow(String windowId) async {
+    final activated = await _windowService.activateWindow(windowId);
+    if (!activated && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to activate window')),
+      );
+    }
   }
 
   @override
@@ -237,6 +257,15 @@ class _DockHomeState extends State<DockHome> {
                 }
               },
               pinnedApps: _pinnedApps,
+              runningApps: [],
+              transientApps: _openWindows.map((w) => DesktopEntry(
+                name: w.title,
+                exec: null,
+                iconPath: null,
+                isSvgIcon: false,
+              )).toList(),
+              windowIdMap: Map.fromEntries(_openWindows.map((w) => MapEntry(w.title, w.windowId))),
+              onWindowActivate: _activateWindow,
               onUnpin: (name) => _handleUnpinRequest(name),
               onReorder: (oldIndex, newIndex) {
                 setState(() {

@@ -10,8 +10,12 @@ class DockPanel extends StatefulWidget {
   final VoidCallback? onMinimizeLauncher;
   final VoidCallback? onRestoreLauncher;
   final List<DesktopEntry> pinnedApps;
+  final List<DesktopEntry> runningApps;
+  final List<DesktopEntry> transientApps;
   final Function(String) onUnpin;
   final Function(int oldIndex, int newIndex)? onReorder;
+  final Function(String windowId)? onWindowActivate; // window ID to activate
+  final Map<String, String>? windowIdMap; // maps window title -> window ID
   
   const DockPanel({
     super.key,
@@ -20,8 +24,12 @@ class DockPanel extends StatefulWidget {
     this.onMinimizeLauncher,
     this.onRestoreLauncher,
     required this.pinnedApps,
+    required this.runningApps,
+    required this.transientApps,
     required this.onUnpin,
     this.onReorder,
+    this.onWindowActivate,
+    this.windowIdMap,
   });
 
   @override
@@ -30,6 +38,7 @@ class DockPanel extends StatefulWidget {
 
 class _DockPanelState extends State<DockPanel> {
   Widget _buildDockIcon(DesktopEntry entry) {
+    final isRunning = _isEntryRunning(entry);
     if (entry.iconPath != null) {
       if (entry.isSvgIcon) {
         return GestureDetector(
@@ -41,6 +50,7 @@ class _DockPanelState extends State<DockPanel> {
               height: 40,
             ),
             tooltip: entry.name,
+            isRunning: isRunning,
             onTap: () => widget.onLaunch(entry),
           ),
         );
@@ -50,6 +60,7 @@ class _DockPanelState extends State<DockPanel> {
           child: DockIcon(
             iconData: FileImage(File(entry.iconPath!)),
             tooltip: entry.name,
+            isRunning: isRunning,
             onTap: () => widget.onLaunch(entry),
           ),
         );
@@ -60,10 +71,39 @@ class _DockPanelState extends State<DockPanel> {
         child: DockIcon(
           icon: Icons.apps,
           tooltip: entry.name,
+          isRunning: isRunning,
           onTap: () => widget.onLaunch(entry),
         ),
       );
     }
+  }
+
+  bool _isEntryRunning(DesktopEntry entry) {
+    final exec = entry.exec ?? '';
+    final cleaned = exec.replaceAll(RegExp(r'%[a-zA-Z]'), '').trim();
+    final firstToken = cleaned.isNotEmpty ? cleaned.split(RegExp(r'\s+')).first : '';
+    final execBase = firstToken.split('/').last.toLowerCase();
+    final nameLower = entry.name.toLowerCase();
+
+    bool matchesEntry(DesktopEntry e) {
+      final eExec = e.exec ?? '';
+      final eClean = eExec.replaceAll(RegExp(r'%[a-zA-Z]'), '').trim();
+      final eFirst = eClean.isNotEmpty ? eClean.split(RegExp(r'\s+')).first : '';
+      final eBase = eFirst.split('/').last.toLowerCase();
+      if (execBase.isNotEmpty && eBase.isNotEmpty && (eBase.contains(execBase) || execBase.contains(eBase))) return true;
+      if (nameLower.isNotEmpty && e.name.toLowerCase().contains(nameLower)) return true;
+      return false;
+    }
+
+    for (final ra in widget.runningApps) {
+      if (matchesEntry(ra)) return true;
+    }
+
+    for (final ta in widget.transientApps) {
+      if (matchesEntry(ta)) return true;
+    }
+
+    return false;
   }
 
   void _showDockIconMenu(BuildContext context, TapUpDetails details, DesktopEntry entry) {
@@ -150,7 +190,34 @@ class _DockPanelState extends State<DockPanel> {
                     borderRadius: BorderRadius.circular(0.5),
                   ),
                 ),
-                // Pinned apps
+                // Transient apps (windows)
+                if (widget.transientApps.isNotEmpty)
+                  ...widget.transientApps.asMap().entries.expand((entry) {
+                    final windowId = widget.windowIdMap?[entry.value.name];
+                    final onTapHandler = windowId != null && widget.onWindowActivate != null
+                        ? () => widget.onWindowActivate!(windowId)
+                        : () {};
+                    return [
+                      GestureDetector(
+                        onTap: onTapHandler,
+                        onSecondaryTapUp: (details) => _showDockIconMenu(context, details, entry.value),
+                        child: DockIcon(
+                          icon: Icons.window_rounded,
+                          tooltip: entry.value.name,
+                          isRunning: true,
+                          onTap: onTapHandler,
+                        ),
+                      ),
+                      if (entry.key < widget.transientApps.length - 1)
+                        Container(
+                          width: 8,
+                          height: 42,
+                          margin: const EdgeInsets.symmetric(horizontal: 4),
+                        ),
+                    ];
+                  }),
+
+                // Pinned apps (user persisted)
                 if (widget.pinnedApps.isNotEmpty)
                   ...widget.pinnedApps.asMap().entries.expand((entry) {
                     return [
@@ -165,7 +232,7 @@ class _DockPanelState extends State<DockPanel> {
                           child: _buildDockIcon(entry.value),
                         ),
                         child: DragTarget<int>(
-                          onWillAcceptWithDetails: (details) => details.data != null && details.data != entry.key,
+                          onWillAcceptWithDetails: (details) => details.data != entry.key,
                           onAcceptWithDetails: (details) {
                             widget.onReorder?.call(details.data, entry.key);
                           },

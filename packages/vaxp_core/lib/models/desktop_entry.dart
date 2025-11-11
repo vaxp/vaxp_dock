@@ -6,12 +6,14 @@ class DesktopEntry {
   final String? exec;
   late final String? iconPath;
   final bool isSvgIcon;
+  final bool autoRemoveOnExit;
 
   DesktopEntry({
     required this.name,
     this.exec,
     this.iconPath,
     this.isSvgIcon = false,
+    this.autoRemoveOnExit = false,
   });
 
   static Future<List<DesktopEntry>> loadAll() async {
@@ -121,6 +123,7 @@ class DesktopEntry {
       'exec': exec,
       'iconPath': iconPath,
       'isSvgIcon': isSvgIcon,
+      'autoRemoveOnExit': autoRemoveOnExit,
     };
   }
 
@@ -130,6 +133,7 @@ class DesktopEntry {
       exec: json['exec'] as String?,
       iconPath: json['iconPath'] as String?,
       isSvgIcon: json['isSvgIcon'] as bool? ?? false,
+      autoRemoveOnExit: json['autoRemoveOnExit'] as bool? ?? false,
     );
   }
 }

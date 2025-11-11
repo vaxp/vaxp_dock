@@ -5,6 +5,7 @@ class DockIcon extends StatefulWidget {
   final ImageProvider<Object>? iconData;
   final Widget? customChild;
   final String? tooltip;
+  final bool isRunning;
   final VoidCallback onTap;
   final String? name;
 
@@ -14,6 +15,7 @@ class DockIcon extends StatefulWidget {
     this.iconData,
     this.customChild,
     this.tooltip,
+    this.isRunning = false,
     required this.onTap,
     this.name,
   }) : assert(icon != null || iconData != null || customChild != null, 
@@ -91,15 +93,23 @@ class _DockIconState extends State<DockIcon> with SingleTickerProviderStateMixin
                                 ),
                     ),
                     // Running indicator dot
-                    // Container(
-                    //   margin: const EdgeInsets.only(top: 5),
-                    //   width: 5,
-                    //   height: 5,
-                    //   decoration: BoxDecoration(
-                    //     color: Colors.white.withOpacity(0.8),
-                    //     shape: BoxShape.circle,
-                    //   ),
-                    // ),
+                    if (widget.isRunning)
+                      Container(
+                        margin: const EdgeInsets.only(top: 5),
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: Colors.greenAccent.withOpacity(0.95),
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.greenAccent.withOpacity(0.4),
+                              blurRadius: 4,
+                              spreadRadius: 1,
+                            ),
+                          ],
+                        ),
+                      ),
                   ],
                 ),
               );
