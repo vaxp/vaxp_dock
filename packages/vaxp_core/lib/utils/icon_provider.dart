@@ -65,8 +65,8 @@ class IconProvider {
     // 5. Icon categories to check
     final categories = ['apps', 'actions', 'devices', 'categories', 'places', 'status', 'emblems', 'mimetypes'];
     
-    // 6. Extensions to try
-    final extensions = ['.svg', '.png', '.xpm'];
+    // 6. Extensions to try - support all common icon formats
+    final extensions = ['.svg', '.png', '.ico', '.xpm', '.bmp', '.jpg', '.jpeg', '.gif', '.webp'];
     
     // Search for icon
     for (final basePath in systemPaths) {
@@ -98,7 +98,7 @@ class IconProvider {
       }
     }
 
-    // Check pixmaps directory as fallback
+    // Check pixmaps directory as fallback (try all extensions)
     for (final ext in extensions) {
       final pixmapPath = '/usr/share/pixmaps/$iconName$ext';
       if (File(pixmapPath).existsSync()) {
@@ -106,10 +106,39 @@ class IconProvider {
       }
     }
 
-    // Try pixmaps without extension
+    // Try pixmaps without extension (might be a file without extension)
     final pixmapPath = '/usr/share/pixmaps/$iconName';
     if (File(pixmapPath).existsSync()) {
       return _resolveSymlink(pixmapPath);
+    }
+    
+    // Also try checking if the iconName itself is a full path with any extension
+    if (iconName.contains('.')) {
+      // Already has an extension, try it as-is if it's a relative path
+      for (final basePath in systemPaths) {
+        for (final theme in themeSearchOrder) {
+          final themePath = '$basePath/$theme';
+          if (!Directory(themePath).existsSync()) continue;
+          
+          for (final size in sizes) {
+            for (final category in categories) {
+              final sizeDir = '$themePath/$size/$category';
+              if (!Directory(sizeDir).existsSync()) continue;
+              
+              final path = '$sizeDir/$iconName';
+              if (File(path).existsSync()) {
+                return _resolveSymlink(path);
+              }
+            }
+          }
+        }
+      }
+      
+      // Try pixmaps with the extension from iconName
+      final pixmapPathWithExt = '/usr/share/pixmaps/$iconName';
+      if (File(pixmapPathWithExt).existsSync()) {
+        return _resolveSymlink(pixmapPathWithExt);
+      }
     }
 
     return null;

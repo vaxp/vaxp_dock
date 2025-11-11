@@ -58,6 +58,7 @@ class WindowService {
   }
 
   /// Poll wmctrl for current windows
+  /// Also uses xdotool as a fallback to ensure ALL windows are captured
   Future<void> _pollWindows() async {
     try {
       // Use -lx to get window classes for better matching
@@ -67,6 +68,9 @@ class WindowService {
         await _pollWindowsFallback();
         return;
       }
+      
+      // Also try xdotool to catch any windows wmctrl might miss
+      await _pollWindowsXdotool();
 
       final lines = (result.stdout as String).split('\n');
       final newWindows = <WindowInfo>[];
@@ -79,9 +83,11 @@ class WindowService {
         // Or: "0x00400001  0  Navigator.Firefox  hostname  Firefox"
         // Note: Some systems may have different spacing, so we need flexible parsing
         final parts = line.split(RegExp(r'\s+'));
-        if (parts.length < 4) continue;
+        if (parts.length < 3) continue; // Minimum: ID DESK CLASS
 
         final windowId = parts[0]; // e.g., "0x00400001"
+        if (!windowId.startsWith('0x')) continue; // Must be a valid window ID
+        
         final desktopStr = parts[1]; // e.g., "0"
         final desktopIndex = int.tryParse(desktopStr) ?? 0;
         
@@ -100,37 +106,30 @@ class WindowService {
         // Title is everything after the class and hostname
         // Format: ID DESK CLASS.INSTANCE HOSTNAME TITLE...
         // So title starts at index 4 (0=ID, 1=DESK, 2=CLASS, 3=HOSTNAME, 4+=TITLE)
-        // Note: Some windows might not have a hostname, so we need flexible parsing
+        // Note: Some windows might not have a hostname or title, so we need flexible parsing
         String title;
         if (parts.length > 4) {
           // Standard case: ID DESK CLASS HOSTNAME TITLE...
           title = parts.sublist(4).join(' ').trim();
         } else if (parts.length > 3) {
           // No hostname or title is part of class field: ID DESK CLASS TITLE
-          // Check if part[3] looks like a title (not a class name)
-          final possibleTitle = parts[3];
-          // If it contains spaces or looks like a title, use it
-          if (possibleTitle.contains(' ') || possibleTitle.length > 10) {
-            title = parts.sublist(3).join(' ').trim();
-          } else {
-            // Might be just the class, try to get more info
-            title = possibleTitle;
-          }
+          title = parts.sublist(3).join(' ').trim();
         } else {
-          // Very minimal info, skip
-          continue;
+          // No title available, use window class or window ID as fallback
+          title = windowClass ?? windowInstance ?? windowId;
         }
 
-        // Skip invisible/special windows (those often start with '-')
-        // But allow desktop index -1 (sticky/all-desktops) as some apps use this
-        // Only skip if desktop index is explicitly negative AND title suggests it's a system window
-        if (desktopIndex < 0 && _isSystemWindow(title, windowClass)) continue;
+        // If title is still empty, use window class or ID
+        if (title.isEmpty) {
+          title = windowClass ?? windowInstance ?? windowId;
+        }
 
-        // Skip windows with empty titles (often internal)
-        if (title.isEmpty) continue;
-
-        // Filter out known non-GUI or system windows by class or title
-        if (_isSystemWindow(title, windowClass)) continue;
+        // Only filter out the dock itself - system services don't have graphical windows
+        final lowerClass = windowClass?.toLowerCase() ?? '';
+        final lowerTitle = title.toLowerCase();
+        if (lowerClass.contains('vaxp-dock') || lowerTitle.contains('vaxp-dock')) {
+          continue;
+        }
 
         // Check for active window using xdotool or wmctrl -a check
         final isActive = await _checkIfActive(windowId);
@@ -167,16 +166,35 @@ class WindowService {
         // wmctrl -l format: ID DESK PID MACHINE TITLE
         // Example: "0x00400001 0 1234 host Firefox"
         final parts = line.split(RegExp(r'\s+'));
-        if (parts.length < 5) continue;
+        if (parts.length < 3) continue; // Minimum: ID DESK (at least)
 
         final windowId = parts[0];
+        if (!windowId.startsWith('0x')) continue; // Must be a valid window ID
+        
         final desktopStr = parts[1];
         final desktopIndex = int.tryParse(desktopStr) ?? 0;
-        final title = parts.sublist(4).join(' ').trim();
+        
+        // Title is everything after DESK PID MACHINE (index 4+)
+        // But handle cases where there might be fewer parts
+        String title;
+        if (parts.length > 4) {
+          title = parts.sublist(4).join(' ').trim();
+        } else if (parts.length > 3) {
+          // Might not have a proper title, use what's available
+          title = parts.sublist(3).join(' ').trim();
+        } else {
+          // Very minimal info, use window ID as fallback
+          title = windowId;
+        }
 
-        if (desktopIndex < 0) continue;
-        if (title.isEmpty) continue;
-        if (_isSystemWindow(title, null)) continue;
+        // If title is still empty, use window ID as fallback
+        if (title.isEmpty) {
+          title = windowId;
+        }
+        
+        // Only filter out the dock itself
+        final lowerTitle = title.toLowerCase();
+        if (lowerTitle.contains('vaxp-dock')) continue;
 
         // Try to get window class using xprop as fallback
         String? windowClass;
@@ -210,6 +228,108 @@ class WindowService {
     }
   }
 
+  /// Additional method using xdotool to catch ALL windows
+  /// This ensures we don't miss any windows that wmctrl might skip
+  Future<void> _pollWindowsXdotool() async {
+    try {
+      // Get all visible window IDs using xdotool
+      // Use a pattern that matches everything (.* matches any string)
+      final result = await Process.run('xdotool', ['search', '--onlyvisible', '.*']);
+      if (result.exitCode != 0) {
+        // Fallback: try searching without onlyvisible to catch all windows
+        final altResult = await Process.run('xdotool', ['search', '.*']);
+        if (altResult.exitCode != 0) return;
+        final windowIds = (altResult.stdout as String)
+            .split('\n')
+            .where((id) => id.trim().isNotEmpty)
+            .toList();
+        await _processXdotoolWindows(windowIds);
+        return;
+      }
+
+      final windowIds = (result.stdout as String)
+          .split('\n')
+          .where((id) => id.trim().isNotEmpty)
+          .toList();
+      
+      await _processXdotoolWindows(windowIds);
+    } catch (_) {
+      // xdotool not available or failed, continue with wmctrl results only
+    }
+  }
+
+  /// Process windows found by xdotool
+  Future<void> _processXdotoolWindows(List<String> windowIds) async {
+    final newWindows = <WindowInfo>[];
+    final existingWindowIds = _activeWindows.map((w) => w.windowId.toLowerCase()).toSet();
+
+    for (final windowId in windowIds) {
+        // Convert to wmctrl format (0x prefix)
+        final hexId = windowId.startsWith('0x') 
+            ? windowId 
+            : '0x${int.tryParse(windowId)?.toRadixString(16).padLeft(8, '0') ?? windowId}';
+        
+        // Skip if we already have this window from wmctrl
+        if (existingWindowIds.contains(hexId.toLowerCase())) continue;
+        
+        // Skip the dock itself
+        if (hexId.toLowerCase().contains('vaxp-dock')) continue;
+
+        try {
+          // Get window name/title
+          final nameResult = await Process.run('xdotool', ['getwindowname', windowId]);
+          final title = nameResult.exitCode == 0 
+              ? nameResult.stdout.toString().trim() 
+              : hexId;
+
+          if (title.isEmpty) continue;
+
+          // Get window class
+          final classResult = await Process.run('xdotool', ['getwindowclassname', windowId]);
+          String? windowClass;
+          if (classResult.exitCode == 0) {
+            windowClass = classResult.stdout.toString().trim();
+            if (windowClass.isEmpty) windowClass = null;
+          }
+
+          // Get desktop (workspace)
+          int desktopIndex = 0;
+          try {
+            final desktopResult = await Process.run('xdotool', ['get_desktop_for_window', windowId]);
+            if (desktopResult.exitCode == 0) {
+              desktopIndex = int.tryParse(desktopResult.stdout.toString().trim()) ?? 0;
+            }
+          } catch (_) {
+            // Desktop detection failed, use default
+          }
+
+          final isActive = await _checkIfActive(hexId);
+
+          newWindows.add(WindowInfo(
+            windowId: hexId,
+            title: title,
+            windowClass: windowClass,
+            desktopIndex: desktopIndex,
+            isActive: isActive,
+          ));
+        } catch (_) {
+          // Skip this window if we can't get its info
+          continue;
+        }
+      }
+
+    // Merge with existing windows
+    if (newWindows.isNotEmpty) {
+      final allWindows = <WindowInfo>[..._activeWindows, ...newWindows];
+      // Remove duplicates based on windowId
+      final uniqueWindows = <String, WindowInfo>{};
+      for (final window in allWindows) {
+        uniqueWindows[window.windowId.toLowerCase()] = window;
+      }
+      _updateWindows(uniqueWindows.values.toList());
+    }
+  }
+
   /// Check if a window is currently active
   Future<bool> _checkIfActive(String windowId) async {
     try {
@@ -234,65 +354,6 @@ class WindowService {
     return false;
   }
 
-  /// Simple heuristic to filter out non-GUI/system windows
-  /// Made less aggressive to avoid filtering legitimate apps
-  static bool _isSystemWindow(String title, String? windowClass) {
-    final lowerTitle = title.toLowerCase().trim();
-    final lowerClass = windowClass?.toLowerCase() ?? '';
-    
-    // Only filter if title/class exactly matches or starts with known system patterns
-    // This prevents filtering apps that happen to contain these words
-    
-    // Skip by exact window class matches (most reliable)
-    final exactClassMatches = [
-      'xfdesktop',
-      'xfce4-panel',
-      'gnome-shell',
-      'polybar',
-      'i3bar',
-      'vaxp-dock',
-      'conky',
-      'tint2',
-    ];
-    
-    for (final pattern in exactClassMatches) {
-      if (lowerClass == pattern || lowerClass.startsWith('$pattern.')) {
-        return true;
-      }
-    }
-    
-    // Skip by exact title matches (more precise than contains)
-    final exactTitleMatches = [
-      'xfdesktop',
-      'xfce4-panel',
-      'gnome-shell',
-      'polybar',
-      'i3bar',
-      'vaxp-dock',
-      'conky',
-      'tint2',
-    ];
-    
-    for (final pattern in exactTitleMatches) {
-      if (lowerTitle == pattern) {
-        return true;
-      }
-    }
-    
-    // Only filter titles that start with known system prefixes (less aggressive)
-    final titlePrefixPatterns = [
-      'desktop window', // desktop background windows
-      'compositor', // compositor windows
-    ];
-    
-    for (final pattern in titlePrefixPatterns) {
-      if (lowerTitle.startsWith(pattern)) {
-        return true;
-      }
-    }
-
-    return false;
-  }
 
   void _updateWindows(List<WindowInfo> windows) {
     // Only emit if the window list changed
