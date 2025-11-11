@@ -175,9 +175,30 @@ class _DockPanelState extends State<DockPanel> {
         children: [
           GestureDetector(
             onSecondaryTapUp: (details) {
-              if (widget.onSettingsChanged != null) {
-                _showSettingsDialog();
-              }
+              // Only show settings menu on empty space (not on icons)
+              // Check if the tap was on the container background
+              final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+              final position = RelativeRect.fromRect(
+                Rect.fromPoints(
+                  details.globalPosition,
+                  details.globalPosition,
+                ),
+                Offset.zero & overlay.size,
+              );
+              showMenu(
+                context: context,
+                position: position,
+                items: [
+                  PopupMenuItem(
+                    onTap: () {
+                      if (widget.onSettingsChanged != null) {
+                        _showSettingsDialog();
+                      }
+                    },
+                    child: const Text('Settings'),
+                  ),
+                ],
+              );
             },
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
