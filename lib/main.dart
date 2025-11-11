@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vaxp_core/models/desktop_entry.dart';
 import 'package:vaxp_core/services/window_service.dart';
+import 'package:vaxp_core/services/window_matcher_service.dart';
 import 'package:vaxp_core/services/dock_service.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 import 'widgets/dock/dock_panel.dart';
@@ -67,6 +68,7 @@ class _DockHomeState extends State<DockHome> {
   bool _launcherVisible = false;
   bool _launcherMinimized = false;
   late final WindowService _windowService;
+  late final WindowMatcherService _windowMatcher;
 
   @override
   void initState() {
@@ -78,6 +80,10 @@ class _DockHomeState extends State<DockHome> {
     WidgetsFlutterBinding.ensureInitialized();
     _loadPinnedApps();
     _setupHotkey();
+
+    // Initialize window matcher and load desktop entries
+    _windowMatcher = WindowMatcherService();
+    _windowMatcher.loadDesktopEntries();
 
     // Start window monitoring
     _windowService = WindowService();
@@ -258,12 +264,26 @@ class _DockHomeState extends State<DockHome> {
               },
               pinnedApps: _pinnedApps,
               runningApps: [],
-              transientApps: _openWindows.map((w) => DesktopEntry(
-                name: w.title,
-                exec: null,
-                iconPath: null,
-                isSvgIcon: false,
-              )).toList(),
+              transientApps: _openWindows.map((w) {
+                // Try to match window to desktop entry for icon
+                final matched = _windowMatcher.matchWindowToEntry(w);
+                if (matched != null) {
+                  // Use window title as name to ensure windowIdMap lookup works
+                  return DesktopEntry(
+                    name: w.title,
+                    exec: matched.exec,
+                    iconPath: matched.iconPath,
+                    isSvgIcon: matched.isSvgIcon,
+                  );
+                }
+                // Fallback: create entry with window title
+                return DesktopEntry(
+                  name: w.title,
+                  exec: null,
+                  iconPath: null,
+                  isSvgIcon: false,
+                );
+              }).toList(),
               windowIdMap: Map.fromEntries(_openWindows.map((w) => MapEntry(w.title, w.windowId))),
               onWindowActivate: _activateWindow,
               onUnpin: (name) => _handleUnpinRequest(name),

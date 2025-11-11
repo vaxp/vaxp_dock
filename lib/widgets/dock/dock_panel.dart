@@ -38,42 +38,37 @@ class DockPanel extends StatefulWidget {
 
 class _DockPanelState extends State<DockPanel> {
   Widget _buildDockIcon(DesktopEntry entry) {
+    return _buildDockIconWithHandler(entry, () => widget.onLaunch(entry));
+  }
+
+  Widget _buildDockIconWithHandler(DesktopEntry entry, VoidCallback onTap) {
     final isRunning = _isEntryRunning(entry);
     if (entry.iconPath != null) {
       if (entry.isSvgIcon) {
-        return GestureDetector(
-          onSecondaryTapUp: (details) => _showDockIconMenu(context, details, entry),
-          child: DockIcon(
-            customChild: SvgPicture.file(
-              File(entry.iconPath!),
-              width: 40,
-              height: 40,
-            ),
-            tooltip: entry.name,
-            isRunning: isRunning,
-            onTap: () => widget.onLaunch(entry),
+        return DockIcon(
+          customChild: SvgPicture.file(
+            File(entry.iconPath!),
+            width: 40,
+            height: 40,
           ),
+          tooltip: entry.name,
+          isRunning: isRunning,
+          onTap: onTap,
         );
       } else {
-        return GestureDetector(
-          onSecondaryTapUp: (details) => _showDockIconMenu(context, details, entry),
-          child: DockIcon(
-            iconData: FileImage(File(entry.iconPath!)),
-            tooltip: entry.name,
-            isRunning: isRunning,
-            onTap: () => widget.onLaunch(entry),
-          ),
+        return DockIcon(
+          iconData: FileImage(File(entry.iconPath!)),
+          tooltip: entry.name,
+          isRunning: isRunning,
+          onTap: onTap,
         );
       }
     } else {
-      return GestureDetector(
-        onSecondaryTapUp: (details) => _showDockIconMenu(context, details, entry),
-        child: DockIcon(
-          icon: Icons.window_rounded,
-          tooltip: entry.name,
-          isRunning: isRunning,
-          onTap: () => widget.onLaunch(entry),
-        ),
+      return DockIcon(
+        icon: Icons.window_rounded,
+        tooltip: entry.name,
+        isRunning: isRunning,
+        onTap: onTap,
       );
     }
   }
@@ -197,16 +192,18 @@ class _DockPanelState extends State<DockPanel> {
                     final onTapHandler = windowId != null && widget.onWindowActivate != null
                         ? () => widget.onWindowActivate!(windowId)
                         : () {};
+                    // Create a temporary entry with the tap handler for _buildDockIcon
+                    final entryWithHandler = DesktopEntry(
+                      name: entry.value.name,
+                      exec: entry.value.exec,
+                      iconPath: entry.value.iconPath,
+                      isSvgIcon: entry.value.isSvgIcon,
+                    );
                     return [
                       GestureDetector(
                         onTap: onTapHandler,
                         onSecondaryTapUp: (details) => _showDockIconMenu(context, details, entry.value),
-                        child: DockIcon(
-                          icon: Icons.window_rounded,
-                          tooltip: entry.value.name,
-                          isRunning: true,
-                          onTap: onTapHandler,
-                        ),
+                        child: _buildDockIconWithHandler(entryWithHandler, onTapHandler),
                       ),
                       if (entry.key < widget.transientApps.length - 1)
                         Container(
