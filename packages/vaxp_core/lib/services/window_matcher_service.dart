@@ -22,17 +22,17 @@ class WindowMatcherService {
     DesktopEntry? bestMatch;
 
     // Strategy 1: Match by window class (most reliable)
-    if (window.windowClass != null) {
+    if (window.windowClass != null && window.windowClass!.isNotEmpty) {
       bestMatch = _matchByClass(window.windowClass!, window.windowInstance);
       if (bestMatch != null) return _resolveIcon(bestMatch);
     }
 
-    // Strategy 2: Match by window title
+    // Strategy 2: Match by window title (works well even for Wayland apps)
     bestMatch = _matchByTitle(window.title);
     if (bestMatch != null) return _resolveIcon(bestMatch);
 
     // Strategy 3: Match by window instance
-    if (window.windowInstance != null) {
+    if (window.windowInstance != null && window.windowInstance!.isNotEmpty) {
       bestMatch = _matchByInstance(window.windowInstance!);
       if (bestMatch != null) return _resolveIcon(bestMatch);
     }
@@ -122,24 +122,67 @@ class WindowMatcherService {
   DesktopEntry? _matchByTitle(String title) {
     final lowerTitle = title.toLowerCase();
     
-    // Remove common suffixes like " - Mozilla Firefox"
-    final cleanTitle = lowerTitle
-        .replaceAll(RegExp(r'\s*-\s*.*$'), '')
-        .replaceAll(RegExp(r'\s*—\s*.*$'), '')
-        .trim();
-
-    // Try exact match
+    // Strategy 1: Try exact match first
     for (final entry in _desktopEntries) {
-      if (entry.name.toLowerCase() == cleanTitle) {
+      if (entry.name.toLowerCase() == lowerTitle) {
         return entry;
       }
     }
 
-    // Try partial match
+    // Strategy 2: Try removing common app name suffixes (like "- Code", "- Firefox")
+    // and match what remains
+    final commonSuffixes = [
+      RegExp(r'\s*-\s*code\s*$'),
+      RegExp(r'\s*-\s*visual\s+studio\s+code\s*$'),
+      RegExp(r'\s*-\s*mozilla\s+firefox\s*$'),
+      RegExp(r'\s*-\s*google\s+chrome\s*$'),
+      RegExp(r'\s*-\s*chromium\s*$'),
+      RegExp(r'\s*—\s*.*$'), // Em-dash with anything after
+    ];
+    
+    for (final suffix in commonSuffixes) {
+      final cleanTitle = lowerTitle.replaceAll(suffix, '').trim();
+      if (cleanTitle.isNotEmpty && cleanTitle != lowerTitle) {
+        for (final entry in _desktopEntries) {
+          if (entry.name.toLowerCase() == cleanTitle) {
+            return entry;
+          }
+        }
+      }
+    }
+
+    // Strategy 3: Try matching entry names against full title (substring match)
     for (final entry in _desktopEntries) {
       final lowerName = entry.name.toLowerCase();
-      if (lowerName.contains(cleanTitle) || cleanTitle.contains(lowerName)) {
+      
+      // Check if entry name is in the title (like "Files" in "Downloads - Files")
+      if (lowerTitle.contains(lowerName)) {
         return entry;
+      }
+    }
+
+    // Strategy 4: Try first word matching (for simple titles)
+    final titleWords = lowerTitle.split(RegExp(r'[\s-]+'));
+    final firstWord = titleWords.isNotEmpty ? titleWords.first : '';
+    if (firstWord.isNotEmpty && firstWord.length > 2) { // Avoid matching single letters
+      for (final entry in _desktopEntries) {
+        final lowerName = entry.name.toLowerCase();
+        if (lowerName == firstWord || lowerName.startsWith(firstWord)) {
+          return entry;
+        }
+      }
+    }
+
+    // Strategy 5: Try matching last meaningful word (after the dash)
+    if (lowerTitle.contains('-')) {
+      final parts = lowerTitle.split('-');
+      final lastPart = parts.last.trim();
+      if (lastPart.isNotEmpty && lastPart.length > 2) {
+        for (final entry in _desktopEntries) {
+          if (entry.name.toLowerCase() == lastPart) {
+            return entry;
+          }
+        }
       }
     }
 

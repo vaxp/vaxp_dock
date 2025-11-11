@@ -7,10 +7,31 @@ import 'package:vaxp_core/services/window_service.dart';
 import 'package:vaxp_core/services/window_matcher_service.dart';
 import 'package:vaxp_core/services/dock_service.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
+import 'services/dock_settings_service.dart';
 import 'widgets/dock/dock_panel.dart';
+import 'windows/settings_window.dart';
+import 'package:desktop_multi_window/desktop_multi_window.dart';
 
-void main() async {
+void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Check if this is a sub-window (settings window)
+  // When created via `desktop_multi_window` the arguments are prefixed
+  // (for example: ["multi_window", windowId, config.arguments]).
+  // Create a dedicated function to run the settings window and detect
+  // the presence of 'settings' anywhere in the args to handle that case.
+  void runSettingsWindow() {
+    runApp(const SettingsWindow());
+  }
+
+  if (args.isNotEmpty) {
+    // If 'settings' is passed directly or as one of the multi-window args
+    // then run the SettingsWindow entrypoint.
+    if (args.contains('settings') || (args.length > 1 && args[0] == 'settings')) {
+      runSettingsWindow();
+      return;
+    }
+  }
   
   // Initialize D-Bus service
   final dockService = VaxpDockService();
@@ -62,13 +83,14 @@ class DockHome extends StatefulWidget {
 }
 
 class _DockHomeState extends State<DockHome> {
-  String? _backgroundImagePath;
   List<DesktopEntry> _pinnedApps = [];
   List<WindowInfo> _openWindows = [];
   bool _launcherVisible = false;
   bool _launcherMinimized = false;
   late final WindowService _windowService;
   late final WindowMatcherService _windowMatcher;
+  final DockSettingsService _settingsService = DockSettingsService();
+  DockSettings _settings = DockSettings();
 
   @override
   void initState() {
@@ -78,6 +100,7 @@ class _DockHomeState extends State<DockHome> {
     widget.dockService.onLauncherState = _handleLauncherState;
     // Ensure Flutter bindings are initialized for shared_preferences
     WidgetsFlutterBinding.ensureInitialized();
+    _loadSettings();
     _loadPinnedApps();
     _setupHotkey();
 
@@ -94,6 +117,111 @@ class _DockHomeState extends State<DockHome> {
         _openWindows = windows;
       });
     });
+
+    // Listen to settings changes
+    _settingsService.addListener(_onSettingsChanged);
+
+    // Listen for settings updates from sub-windows (settings window).
+    // Use a WindowMethodChannel so the settings window (which runs in a
+    // separate engine) can notify the main window to reload/apply settings.
+    () async {
+      try {
+        final channel = WindowMethodChannel('vaxp_dock_settings', mode: ChannelMode.unidirectional);
+        await channel.setMethodCallHandler((call) async {
+          if (call.method == 'update') {
+            try {
+              final args = call.arguments;
+              if (args is Map) {
+                final settings = DockSettings.fromJson(Map<String, dynamic>.from(args));
+                // Update local settings state (this will save and notify listeners)
+                await _saveSettings(settings);
+              }
+            } catch (e) {
+              debugPrint('Failed to handle settings update call: $e');
+            }
+          } else if (call.method == 'restart') {
+            // Request to restart the dock process. Spawn a new process and exit.
+            try {
+              // On Linux, /proc/self/exe points to the running executable. Start a
+              // new instance and exit the current process. If that fails, try to
+              // spawn a fallback command name 'vaxp-dock'.
+              try {
+                await Process.start('/proc/self/exe', []);
+              } catch (_) {
+                await Process.start('vaxp-dock', []);
+              }
+            } catch (e) {
+              debugPrint('Failed to restart dock: $e');
+            }
+            // Exit current process so the newly spawned instance becomes primary
+            // Note: in debug/flutter run this may stop the tooling; intended for
+            // packaged runtime.
+            try {
+              exit(0);
+            } catch (_) {}
+          }
+          return null;
+        });
+      } catch (e) {
+        debugPrint('Failed to set settings channel handler: $e');
+      }
+    }();
+  }
+
+  void _onSettingsChanged(DockSettings settings) {
+    if (!mounted) return;
+    setState(() {
+      _settings = settings;
+    });
+  }
+
+  Future<void> _loadSettings() async {
+    await _settingsService.load();
+    setState(() {
+      _settings = _settingsService.settings;
+    });
+  }
+
+  Future<void> _saveSettings(DockSettings settings) async {
+    await _settingsService.updateSettings(settings);
+
+    // Clear Flutter's image cache so updated files (background image,
+    // custom icons) are reloaded immediately. Also evict any file images
+    // referenced by the new settings to ensure fresh data is read from disk.
+    try {
+      // Clear global image cache
+      PaintingBinding.instance.imageCache.clear();
+
+      // Evict any mapped icons
+      if (settings.iconMappings.isNotEmpty) {
+        for (final path in settings.iconMappings.values) {
+          if (path.isNotEmpty) {
+            try {
+              await FileImage(File(path)).evict();
+            } catch (_) {}
+          }
+        }
+      }
+
+      // If an icon pack directory is set, evict any likely icon files by
+      // scanning the directory and evicting their FileImage entries.
+      if (settings.iconPackPath != null) {
+        try {
+          final dir = Directory(settings.iconPackPath!);
+          if (dir.existsSync()) {
+            await for (final entity in dir.list(recursive: true)) {
+              if (entity is File) {
+                try {
+                  await FileImage(entity).evict();
+                } catch (_) {}
+              }
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('Failed to clear image cache: $e');
+    }
   }
 
   void _handleLauncherState(String state) {
@@ -216,6 +344,7 @@ class _DockHomeState extends State<DockHome> {
 
   @override
   void dispose() {
+    _settingsService.removeListener(_onSettingsChanged);
     HotKeyManager.instance.unregisterAll();
     widget.dockService.dispose();
     _windowService.dispose();
@@ -238,9 +367,9 @@ class _DockHomeState extends State<DockHome> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          if (_backgroundImagePath != null)
+          if (_settings.backgroundImagePath != null)
             Image.file(
-              File(_backgroundImagePath!),
+              File(_settings.backgroundImagePath!),
               fit: BoxFit.cover,
             ),
           Align(
@@ -268,20 +397,70 @@ class _DockHomeState extends State<DockHome> {
                 // Try to match window to desktop entry for icon
                 final matched = _windowMatcher.matchWindowToEntry(w);
                 if (matched != null) {
+                  // Check for custom icon from settings
+                  String? finalIconPath = matched.iconPath;
+                  bool isSvg = matched.isSvgIcon;
+                  
+                  // Check custom icon mappings first
+                  if (_settings.iconMappings.containsKey(matched.name)) {
+                    final customPath = _settings.iconMappings[matched.name];
+                    if (customPath != null && File(customPath).existsSync()) {
+                      finalIconPath = customPath;
+                      isSvg = customPath.toLowerCase().endsWith('.svg');
+                    }
+                  } else if (_settings.iconPackPath != null) {
+                    // Check icon pack directory
+                    final iconPackDir = Directory(_settings.iconPackPath!);
+                    if (iconPackDir.existsSync()) {
+                      final extensions = ['.svg', '.png', '.ico', '.xpm', '.bmp', '.jpg', '.jpeg', '.gif', '.webp'];
+                      for (final ext in extensions) {
+                        final iconPath = '${_settings.iconPackPath}/${matched.name}$ext';
+                        if (File(iconPath).existsSync()) {
+                          finalIconPath = iconPath;
+                          isSvg = ext == '.svg';
+                          break;
+                        }
+                      }
+                    }
+                  }
+                  
                   // Use window title as name to ensure windowIdMap lookup works
                   return DesktopEntry(
                     name: w.title,
                     exec: matched.exec,
-                    iconPath: matched.iconPath,
-                    isSvgIcon: matched.isSvgIcon,
+                    iconPath: finalIconPath,
+                    isSvgIcon: isSvg,
                   );
                 }
-                // Fallback: create entry with window title
+                // Fallback: create entry with window title, but check custom icons
+                String? customIconPath;
+                bool isSvg = false;
+                if (_settings.iconMappings.containsKey(w.title)) {
+                  final customPath = _settings.iconMappings[w.title];
+                  if (customPath != null && File(customPath).existsSync()) {
+                    customIconPath = customPath;
+                    isSvg = customPath.toLowerCase().endsWith('.svg');
+                  }
+                } else if (_settings.iconPackPath != null) {
+                  final iconPackDir = Directory(_settings.iconPackPath!);
+                  if (iconPackDir.existsSync()) {
+                    final extensions = ['.svg', '.png', '.ico', '.xpm', '.bmp', '.jpg', '.jpeg', '.gif', '.webp'];
+                    for (final ext in extensions) {
+                      final iconPath = '${_settings.iconPackPath}/${w.title}$ext';
+                      if (File(iconPath).existsSync()) {
+                        customIconPath = iconPath;
+                        isSvg = ext == '.svg';
+                        break;
+                      }
+                    }
+                  }
+                }
+                
                 return DesktopEntry(
                   name: w.title,
                   exec: null,
-                  iconPath: null,
-                  isSvgIcon: false,
+                  iconPath: customIconPath,
+                  isSvgIcon: isSvg,
                 );
               }).toList(),
               windowIdMap: Map.fromEntries(_openWindows.map((w) => MapEntry(w.title, w.windowId))),
@@ -294,6 +473,8 @@ class _DockHomeState extends State<DockHome> {
                   _savePinnedApps();
                 });
               },
+              settings: _settings,
+              onSettingsChanged: _saveSettings,
             ),
           ),
         ],

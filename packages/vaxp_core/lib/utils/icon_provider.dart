@@ -20,8 +20,42 @@ class IconProvider {
 
   /// Find an icon file in the system icon theme
   /// Handles symbolic links by resolving them to actual files
-  static String? findIcon(String iconName) {
+  /// Also checks custom icon pack if provided
+  static String? findIcon(String iconName, {String? customIconPackPath, Map<String, String>? iconMappings}) {
     if (iconName.isEmpty) return null;
+    
+    // 0. Check custom icon mappings first (app name -> icon path)
+    if (iconMappings != null && iconMappings.containsKey(iconName)) {
+      final customPath = iconMappings[iconName];
+      if (customPath != null) {
+        final file = File(customPath);
+        if (file.existsSync()) {
+          return _resolveSymlink(customPath);
+        }
+      }
+    }
+    
+    // 0.5. Check custom icon pack directory
+    if (customIconPackPath != null) {
+      final iconPackDir = Directory(customIconPackPath);
+      if (iconPackDir.existsSync()) {
+        // Try common extensions
+        final extensions = ['.svg', '.png', '.ico', '.xpm', '.bmp', '.jpg', '.jpeg', '.gif', '.webp'];
+        for (final ext in extensions) {
+          final iconPath = '$customIconPackPath/$iconName$ext';
+          final file = File(iconPath);
+          if (file.existsSync()) {
+            return _resolveSymlink(iconPath);
+          }
+        }
+        // Try without extension
+        final iconPath = '$customIconPackPath/$iconName';
+        final file = File(iconPath);
+        if (file.existsSync()) {
+          return _resolveSymlink(iconPath);
+        }
+      }
+    }
     
     // 1. If it's an absolute path, try it directly and resolve symlinks
     if (iconName.startsWith('/')) {

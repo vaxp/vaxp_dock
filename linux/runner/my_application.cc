@@ -1,6 +1,7 @@
 #include "my_application.h"
 #include <flutter_linux/flutter_linux.h>
 #include "flutter/generated_plugin_registrant.h"
+#include <desktop_multi_window/desktop_multi_window_plugin.h>
 
 #ifdef GDK_WINDOWING_X11
 extern "C" {
@@ -155,6 +156,12 @@ static gboolean my_application_local_command_line(GApplication* application, gch
 
 static void my_application_startup(GApplication* application) {
   G_APPLICATION_CLASS(my_application_parent_class)->startup(application);
+  
+  // Register plugins for sub-windows created by desktop_multi_window
+  // This callback will be called whenever a new window is created
+  desktop_multi_window_plugin_set_window_created_callback([](FlPluginRegistry* registry) {
+    fl_register_plugins(registry);
+  });
 }
 
 static void my_application_shutdown(GApplication* application) {

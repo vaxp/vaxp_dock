@@ -1,7 +1,10 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:vaxp_core/models/desktop_entry.dart';
+import 'package:vaxp_dock/widgets/dock/dock_settings_dialog.dart';
+import '../../services/dock_settings_service.dart';
 import 'dock_icon.dart';
 
 class DockPanel extends StatefulWidget {
@@ -16,6 +19,8 @@ class DockPanel extends StatefulWidget {
   final Function(int oldIndex, int newIndex)? onReorder;
   final Function(String windowId)? onWindowActivate; // window ID to activate
   final Map<String, String>? windowIdMap; // maps window title -> window ID
+  final DockSettings? settings;
+  final Function(DockSettings)? onSettingsChanged;
   
   const DockPanel({
     super.key,
@@ -30,6 +35,8 @@ class DockPanel extends StatefulWidget {
     this.onReorder,
     this.onWindowActivate,
     this.windowIdMap,
+    this.settings,
+    this.onSettingsChanged,
   });
 
   @override
@@ -123,22 +130,64 @@ class _DockPanelState extends State<DockPanel> {
     );
   }
 
+  void _showSettingsDialog() async {
+    if (widget.settings == null || widget.onSettingsChanged == null) return;
+    
+    try {
+      // Open settings in a new window
+      final window = await WindowController.create(
+        WindowConfiguration(
+          arguments: 'settings',
+          hiddenAtLaunch: false,
+        ),
+      );
+      
+      // Set window properties
+      await window.show();
+    } catch (e) {
+      debugPrint('Failed to open settings window: $e');
+      // Fallback to dialog if window creation fails
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => DockSettingsDialog(
+            initialSettings: widget.settings!,
+            onSave: (settings) {
+              widget.onSettingsChanged?.call(settings);
+            },
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final settings = widget.settings ?? DockSettings();
+    final barColor = settings.barColor.withAlpha(
+      (settings.transparency * 255).toInt(),
+    );
+    
     return Padding(
       padding: const EdgeInsets.only(bottom: 0.0),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.black.withAlpha((0.3 * 255).toInt()),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                width: 1,
+          GestureDetector(
+            onSecondaryTapUp: (details) {
+              if (widget.onSettingsChanged != null) {
+                _showSettingsDialog();
+              }
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: barColor,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  width: 1,
+                ),
               ),
-            ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -292,6 +341,7 @@ class _DockPanelState extends State<DockPanel> {
               ],
             ),
           ),
+        ),
         ],
       ),
     );
