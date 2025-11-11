@@ -69,7 +69,7 @@ class _DockPanelState extends State<DockPanel> {
       return GestureDetector(
         onSecondaryTapUp: (details) => _showDockIconMenu(context, details, entry),
         child: DockIcon(
-          icon: Icons.apps,
+          icon: Icons.window_rounded,
           tooltip: entry.name,
           isRunning: isRunning,
           onTap: () => widget.onLaunch(entry),
